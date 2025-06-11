@@ -255,27 +255,39 @@ static void set_to_pam_env(pam_handle_t *pamh, ngx_http_request_t *r,
  * @param source nginx string structure with data and length
  * @param pool pool of the request used for memory allocation
  */
-static char* ngx_strncpy_s(ngx_str_t source, ngx_pool_t *pool)
+static ngx_int_t ngx_strncpy_s(ngx_str_t source, ngx_pool_t *pool, char* destination)
 {
         // allocate memory in pool
-        char* destination = ngx_palloc(pool, source.len + 1);
+        destination = ngx_palloc(pool, source.len + 1);
+        if (destination == NULL){
+            return NGX_ERROR;
+        }
         strncpy(destination, (char *) source.data, source.len);
         // add null terminator
         destination[source.len] = '\0';
-        return destination;
+        return NGX_OK;
 }
 
 /**
  * enrich pam environment with request parameters
  */
-static void add_request_info_to_pam_env(pam_handle_t *pamh,
+static ngx_int_t add_request_info_to_pam_env(pam_handle_t *pamh,
                                         ngx_http_request_t *r)
 {
-        char *request_info = ngx_strncpy_s(r->request_line, r->pool);
-        char *host_info = ngx_strncpy_s(r->headers_in.host->value, r->pool);
+        char *request_info = NULL;
+        if(ngx_strncpy_s(r->request_line, r->pool,request_info) != NGX_OK ){
+            return NGX_ERROR;
+        }
+
+        char *host_info = NULL;
+        if(ngx_strncpy_s(r->request_line, r->pool,host_info) != NGX_OK ){
+            return NGX_ERROR;
+        }
 
         set_to_pam_env(pamh, r, "REQUEST", request_info);
         set_to_pam_env(pamh, r, "HOST", host_info);
+
+        return NGX_OK;
 }
 
 static ngx_int_t
@@ -342,11 +354,18 @@ ngx_http_auth_pam_authenticate(ngx_http_request_t *r,
     }
 
     /* send client IP address to PAM */
-    char *client_ip_addr = ngx_strncpy_s(r->connection->addr_text, r->pool);
+    char *client_ip_addr = NULL;
+    if (ngx_strncpy_s(r->connection->addr_text, r->pool, client_ip_addr) != NGX_OK){
+            ngx_log_error(NGX_LOG_CRIT, r->connection->log, 0,
+                        "PAM: Could not send client IP address to PAM: %s",
+                        pam_strerror(pamh, rc));
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
     if ((rc = pam_set_item(pamh, PAM_RHOST, client_ip_addr)) != PAM_SUCCESS) {
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                      "PAM: Could not set item PAM_RHOST: %s",
-                      pam_strerror(pamh, rc));
+                        "PAM: Could not set item PAM_RHOST: %s",
+                        pam_strerror(pamh, rc));
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
